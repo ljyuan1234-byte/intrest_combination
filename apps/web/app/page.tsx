@@ -1,19 +1,66 @@
-import { dashboardSchema } from '@life/contracts';
+'use client';
 
-async function getDashboard() {
-  const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000'}/api/dashboard`, {
-    cache: 'no-store',
-  });
+import { useEffect, useState } from 'react';
+import type { Dashboard } from '@life/contracts';
 
-  if (!response.ok) {
-    throw new Error('无法连接助手服务');
+const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000';
+
+export default function HomePage() {
+  const [dashboard, setDashboard] = useState<Dashboard | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+
+    fetch(`${apiUrl}/api/v1/dashboard`, {
+      cache: 'no-store',
+      credentials: 'include',
+    })
+      .then(async (response) => {
+        if (response.status === 401) {
+          window.location.assign('/login');
+          return null;
+        }
+
+        const payload = await response.json();
+        if (!response.ok) {
+          throw new Error(payload.error?.message ?? '无法连接助手服务');
+        }
+
+        return payload.data as Dashboard;
+      })
+      .then((data) => {
+        if (active && data) setDashboard(data);
+      })
+      .catch((requestError) => {
+        if (active) setError(requestError instanceof Error ? requestError.message : '无法连接助手服务');
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  if (error) {
+    return (
+      <main className="auth-shell">
+        <section className="auth-card">
+          <p className="eyebrow">SERVICE UNAVAILABLE</p>
+          <h1>暂时无法加载助手</h1>
+          <p className="auth-error">{error}</p>
+          <a className="primary-button" href="/login">返回登录</a>
+        </section>
+      </main>
+    );
   }
 
-  return dashboardSchema.parse(await response.json());
-}
-
-export default async function HomePage() {
-  const dashboard = await getDashboard();
+  if (!dashboard) {
+    return (
+      <main className="auth-shell">
+        <p className="lede">正在加载你的今日概览…</p>
+      </main>
+    );
+  }
 
   return (
     <main className="shell">
@@ -23,7 +70,14 @@ export default async function HomePage() {
           <h1>把今天过得更清楚。</h1>
           <p className="lede">一个围绕日程、健康和消费记录构建的个人云端助手。</p>
         </div>
-        <div className="date-chip">{dashboard.date}</div>
+        <div className="hero-actions">
+          <a className="text-link" href="/tasks">管理待办</a>
+          <a className="text-link" href="/calendar">日程提醒</a>
+          <a className="text-link" href="/health">健康记录</a>
+          <a className="text-link" href="/finance">手动记账</a>
+          <a className="text-link" href="/settings/data">数据账户</a>
+          <div className="date-chip">{dashboard.date}</div>
+        </div>
       </section>
 
       <section className="overview-grid">

@@ -5,6 +5,7 @@ build/
 .env
 .env.*
 !.env.example
+.npmrc
 *.log
 .turbo/
 coverage/
