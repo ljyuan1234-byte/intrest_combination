@@ -7,6 +7,10 @@ if (!databaseUrl) {
   throw new Error('DATABASE_URL is required.');
 }
 
+const sslEnabled = process.env.DATABASE_SSL === 'true';
+const rejectUnauthorized = process.env.DATABASE_SSL_REJECT_UNAUTHORIZED !== 'false';
+const sslCa = process.env.DATABASE_SSL_CA ? await readFile(process.env.DATABASE_SSL_CA, 'utf8') : undefined;
+
 const migrations = [
   {
     id: '0000_phase_1_identity',
@@ -32,12 +36,30 @@ const migrations = [
     id: '0005_phase_2_health_profile',
     sqlUrl: new URL('../drizzle/0005_phase_2_health_profile.sql', import.meta.url),
   },
+  {
+    id: '0006_phase_3_health_agent',
+    sqlUrl: new URL('../drizzle/0006_phase_3_health_agent.sql', import.meta.url),
+  },
+  {
+    id: '0007_phase_4_password_auth',
+    sqlUrl: new URL('../drizzle/0007_phase_4_password_auth.sql', import.meta.url),
+  },
+  {
+    id: '0008_phase_4_health_conversations',
+    sqlUrl: new URL('../drizzle/0008_phase_4_health_conversations.sql', import.meta.url),
+  },
 ] as const;
 
-const pool = new Pool({ connectionString: databaseUrl });
+const pool = new Pool({
+  connectionString: databaseUrl,
+  max: 1,
+  ...(sslEnabled ? { ssl: { rejectUnauthorized, ...(sslCa ? { ca: sslCa } : {}) } } : {}),
+});
 
 try {
   await pool.query('BEGIN');
+  // 防止多个实例同时执行迁移。事务结束时会自动释放。
+  await pool.query('SELECT pg_advisory_xact_lock(847291365)');
   await pool.query(`
     CREATE TABLE IF NOT EXISTS "__life_migrations" (
       "id" varchar(128) PRIMARY KEY,

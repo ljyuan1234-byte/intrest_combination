@@ -16,6 +16,10 @@ const metrics = [
 type ProfileForm = {
   heightCm: string;
   birthYear: string;
+  sex: 'male' | 'female' | 'other' | '';
+  weightKg: string;
+  targetWeightKg: string;
+  activityLevel: 'low' | 'medium' | 'high';
   goal: string;
   allergies: string;
   dietaryPreferences: string;
@@ -26,6 +30,10 @@ type ProfileForm = {
 const emptyProfileForm: ProfileForm = {
   heightCm: '',
   birthYear: '',
+  sex: '',
+  weightKg: '',
+  targetWeightKg: '',
+  activityLevel: 'medium',
   goal: '',
   allergies: '',
   dietaryPreferences: '',
@@ -47,6 +55,10 @@ function profileToForm(profile: HealthProfile | null): ProfileForm {
   return {
     heightCm: profile.heightCm?.toString() ?? '',
     birthYear: profile.birthYear?.toString() ?? '',
+    sex: profile.sex ?? '',
+    weightKg: profile.weightKg?.toString() ?? '',
+    targetWeightKg: profile.targetWeightKg?.toString() ?? '',
+    activityLevel: profile.activityLevel,
     goal: profile.goal ?? '',
     allergies: profile.allergies ?? '',
     dietaryPreferences: profile.dietaryPreferences ?? '',
@@ -148,6 +160,10 @@ export default function HealthPage() {
         body: JSON.stringify({
           heightCm: profileForm.heightCm ? Number(profileForm.heightCm) : null,
           birthYear: profileForm.birthYear ? Number(profileForm.birthYear) : null,
+          sex: profileForm.sex || null,
+          weightKg: profileForm.weightKg ? Number(profileForm.weightKg) : null,
+          targetWeightKg: profileForm.targetWeightKg ? Number(profileForm.targetWeightKg) : null,
+          activityLevel: profileForm.activityLevel,
           goal: profileForm.goal || null,
           allergies: profileForm.allergies || null,
           dietaryPreferences: profileForm.dietaryPreferences || null,
@@ -185,7 +201,11 @@ export default function HealthPage() {
           <h1>健康记录</h1>
           <p className="lede">手动记录日常数据，获得仅供生活方式参考的提示。</p>
         </div>
-        <a className="text-link" href="/">返回首页</a>
+        <div className="header-actions">
+          <a className="text-link" href="/health/chat">健康对话</a>
+          <a className="text-link" href="/health/agent">健康 Agent</a>
+          <a className="text-link" href="/">返回首页</a>
+        </div>
       </header>
 
       {advice ? (
@@ -216,6 +236,23 @@ export default function HealthPage() {
             <input id="profile-height" inputMode="decimal" min="1" onChange={(event) => setProfileForm((current) => ({ ...current, heightCm: event.target.value }))} type="number" value={profileForm.heightCm} />
             <label htmlFor="profile-birth-year">出生年份（可选）</label>
             <input id="profile-birth-year" inputMode="numeric" min="1900" onChange={(event) => setProfileForm((current) => ({ ...current, birthYear: event.target.value }))} type="number" value={profileForm.birthYear} />
+            <label htmlFor="profile-sex">性别（用于热量估算）</label>
+            <select id="profile-sex" onChange={(event) => setProfileForm((current) => ({ ...current, sex: event.target.value as ProfileForm['sex'] }))} value={profileForm.sex}>
+              <option value="">未填写</option>
+              <option value="male">男</option>
+              <option value="female">女</option>
+              <option value="other">其他</option>
+            </select>
+            <label htmlFor="profile-weight">当前体重（kg，可选）</label>
+            <input id="profile-weight" inputMode="decimal" min="1" onChange={(event) => setProfileForm((current) => ({ ...current, weightKg: event.target.value }))} type="number" value={profileForm.weightKg} />
+            <label htmlFor="profile-target-weight">目标体重（kg，可选）</label>
+            <input id="profile-target-weight" inputMode="decimal" min="1" onChange={(event) => setProfileForm((current) => ({ ...current, targetWeightKg: event.target.value }))} type="number" value={profileForm.targetWeightKg} />
+            <label htmlFor="profile-activity">日常活动量</label>
+            <select id="profile-activity" onChange={(event) => setProfileForm((current) => ({ ...current, activityLevel: event.target.value as ProfileForm['activityLevel'] }))} value={profileForm.activityLevel}>
+              <option value="low">低（久坐为主）</option>
+              <option value="medium">中（每周活动 2–3 次）</option>
+              <option value="high">高（每周活动 4 次以上）</option>
+            </select>
             <label htmlFor="profile-goal">目标（可选）</label>
             <input id="profile-goal" maxLength={300} onChange={(event) => setProfileForm((current) => ({ ...current, goal: event.target.value }))} placeholder="例如：保持规律作息" value={profileForm.goal} />
             <label htmlFor="profile-time">可用时间（可选）</label>

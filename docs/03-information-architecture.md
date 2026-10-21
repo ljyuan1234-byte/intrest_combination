@@ -2,11 +2,11 @@
 
 ## Web 路由
 
-`/` 首页；`/tasks` 待办；`/calendar` 日程；`/health` 健康；`/finance` 财务；`/assistant` Agent；`/approvals` 审批；`/mini-apps` 小应用；`/mini-apps/entertainment` 娱乐；`/mini-apps/ticketing` 票务占位；`/settings` 设置；`/settings/data` 数据；`/settings/devices` 设备通知。
+`/` 首页；`/tasks` 待办；`/calendar` 日程；`/health` 健康；`/health/agent` 健康规划 Agent；`/finance` 财务；`/assistant` Agent；`/approvals` 审批；`/mini-apps` 小应用；`/mini-apps/entertainment` 娱乐；`/mini-apps/ticketing` 票务占位；`/settings` 设置；`/settings/data` 数据；`/settings/devices` 设备通知。
 
-## Android 页面
+## 手机浏览器 / PWA
 
-Home、Tasks、Calendar、Health、Finance、Assistant、MiniApps、Settings。底部导航：首页、任务、健康、财务、助手。
+首页、待办、日程、健康、财务、设置。底部导航：首页、待办、日程、健康、财务；顶部保留“数据与账户”入口。PWA 以 `display: standalone` 运行，不缓存登录后的私人数据。
 
 ## 通用状态
 

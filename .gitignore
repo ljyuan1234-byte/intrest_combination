@@ -9,3 +9,9 @@ build/
 *.log
 .turbo/
 coverage/
+
+# Local development data (not committed)
+.tmp/
+.pg/
+.pgdata/
+.pgdata-backup*/

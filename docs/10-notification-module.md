@@ -2,7 +2,7 @@
 
 ## 渠道
 
-Android 使用 FCM 或最终选定的推送服务；Web 使用 Web Push；不把微信作为依赖。
+Web 使用 Web Push；不把微信作为依赖。提醒 Worker 与推送订阅在后续阶段接入。
 
 ## 设备
 

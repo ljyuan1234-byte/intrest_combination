@@ -1,5 +1,23 @@
 import { z } from 'zod';
 
+export const authUserSchema = z.object({
+  id: z.string().uuid(),
+  email: z.string().email().nullable(),
+  phone: z.string().nullable(),
+  displayName: z.string().max(120).nullable(),
+});
+
+export const registerSchema = z.object({
+  identifier: z.string().trim().min(3).max(320),
+  password: z.string().min(8, '密码至少 8 位。').max(128),
+  displayName: z.string().trim().min(1).max(120).nullable().optional(),
+});
+
+export const loginSchema = z.object({
+  identifier: z.string().trim().min(3).max(320),
+  password: z.string().min(1).max(128),
+});
+
 export const dashboardSchema = z.object({
   date: z.string(),
   tasks: z.object({
@@ -97,6 +115,10 @@ export const createReminderSchema = z.object({
 export const healthProfileSchema = z.object({
   heightCm: z.number().positive().nullable(),
   birthYear: z.number().int().min(1900).max(2100).nullable(),
+  sex: z.enum(['male', 'female', 'other']).nullable(),
+  weightKg: z.number().positive().nullable(),
+  targetWeightKg: z.number().positive().nullable(),
+  activityLevel: z.enum(['low', 'medium', 'high']),
   goal: z.string().nullable(),
   allergies: z.string().nullable(),
   dietaryPreferences: z.string().nullable(),
@@ -108,6 +130,10 @@ export const healthProfileSchema = z.object({
 export const updateHealthProfileSchema = z.object({
   heightCm: z.number().positive().max(300).nullable().optional(),
   birthYear: z.number().int().min(1900).max(2100).nullable().optional(),
+  sex: z.enum(['male', 'female', 'other']).nullable().optional(),
+  weightKg: z.number().positive().max(400).nullable().optional(),
+  targetWeightKg: z.number().positive().max(400).nullable().optional(),
+  activityLevel: z.enum(['low', 'medium', 'high']).optional(),
   goal: z.string().trim().max(300).nullable().optional(),
   allergies: z.string().trim().max(500).nullable().optional(),
   dietaryPreferences: z.string().trim().max(500).nullable().optional(),
@@ -149,6 +175,141 @@ export const healthAdviceSchema = z.object({
   dataRange: z.string(),
   generatedAt: z.string().datetime(),
   disclaimer: z.string(),
+});
+
+export const healthModeSchema = z.enum(['wellness', 'fat_loss']);
+
+export const healthIntakeItemSchema = z.object({
+  name: z.string(),
+  raw: z.string(),
+  quantity: z.number().nonnegative(),
+  unit: z.string(),
+  grams: z.number().nonnegative(),
+  calories: z.number().nonnegative(),
+  proteinG: z.number().nonnegative(),
+  carbsG: z.number().nonnegative(),
+  fatG: z.number().nonnegative(),
+  matched: z.boolean(),
+});
+
+export const healthIntakeLogSchema = z.object({
+  id: z.string().uuid(),
+  localDate: z.string().date(),
+  mode: healthModeSchema,
+  rawText: z.string(),
+  waterMl: z.number().int().nonnegative(),
+  totalCalories: z.number().int().nonnegative(),
+  proteinG: z.number().nonnegative(),
+  carbsG: z.number().nonnegative(),
+  fatG: z.number().nonnegative(),
+  items: z.array(healthIntakeItemSchema),
+  updatedAt: z.string().datetime(),
+});
+
+export const saveHealthIntakeSchema = z
+  .object({
+    localDate: z.string().date(),
+    mode: healthModeSchema.default('wellness'),
+    text: z.string().trim().max(4000).default(''),
+    waterMl: z.coerce.number().int().min(0).max(10000).default(0),
+  })
+  .refine((value) => value.text.length > 0 || value.waterMl > 0, {
+    message: '请至少填写食物或饮水量。',
+  });
+
+export const healthPlanMealSchema = z.object({
+  slot: z.string(),
+  suggestion: z.string(),
+  calories: z.number().int().nonnegative(),
+});
+
+export const healthPlanDaySchema = z.object({
+  day: z.string(),
+  focus: z.string(),
+  calorieTarget: z.number().int().nonnegative(),
+  waterMl: z.number().int().nonnegative(),
+  meals: z.array(healthPlanMealSchema),
+  activity: z.string(),
+});
+
+export const healthPlanSchema = z.object({
+  mode: healthModeSchema,
+  basedOnDate: z.string().date(),
+  nextDay: healthPlanDaySchema,
+  week: z.array(healthPlanDaySchema).length(7),
+  longTerm: z.object({
+    goal: z.string(),
+    milestones: z.array(
+      z.object({
+        period: z.string(),
+        target: z.string(),
+        actions: z.array(z.string()),
+      }),
+    ),
+    habits: z.array(z.string()),
+    cautions: z.array(z.string()),
+  }),
+  disclaimer: z.string(),
+});
+
+export const healthAnalysisSchema = z.object({
+  date: z.string().date(),
+  mode: healthModeSchema,
+  bmr: z.number().nonnegative(),
+  tdee: z.number().nonnegative(),
+  bmi: z.number().positive().nullable(),
+  targetCalories: z.number().int().nonnegative(),
+  proteinTargetG: z.number().nonnegative(),
+  waterTargetMl: z.number().int().nonnegative(),
+  calorieBalance: z.number().int(),
+  metrics: z.object({
+    weightKg: z.number().positive().nullable(),
+    sleepMinutes: z.number().int().nonnegative().nullable(),
+    exerciseMinutes: z.number().int().nonnegative().nullable(),
+  }),
+  estimated: z.boolean(),
+  warnings: z.array(z.string()),
+  summary: z.string(),
+});
+
+export const healthAgentResponseSchema = z.object({
+  intake: healthIntakeLogSchema.nullable(),
+  analysis: healthAnalysisSchema,
+  plan: healthPlanSchema,
+});
+
+export const healthChatMessageSchema = z.object({
+  id: z.string().uuid(),
+  role: z.enum(['user', 'assistant', 'tool', 'system']),
+  content: z.string(),
+  createdAt: z.string().datetime(),
+});
+
+export const healthConversationSchema = z.object({
+  id: z.string().uuid(),
+  mode: healthModeSchema,
+  title: z.string(),
+  updatedAt: z.string().datetime(),
+});
+
+export const healthChatRequestSchema = z.object({
+  message: z.string().trim().min(1).max(2000),
+  mode: healthModeSchema.default('wellness'),
+  date: z.string().date().optional(),
+  conversationId: z.string().uuid().optional(),
+});
+
+export const healthExecutionPlanSchema = z.object({
+  intent: z.enum(['log_food', 'ask_plan', 'adjust_plan', 'general']),
+  steps: z.array(z.string()),
+  followUp: z.string().nullable(),
+});
+
+export const healthChatResponseSchema = healthAgentResponseSchema.extend({
+  conversationId: z.string().uuid(),
+  reply: z.string(),
+  messages: z.array(healthChatMessageSchema),
+  execution: healthExecutionPlanSchema,
 });
 
 export const expenseCategorySchema = z.object({
@@ -201,6 +362,9 @@ export const financeSummarySchema = z.object({
   ),
 });
 
+export type AuthUser = z.infer<typeof authUserSchema>;
+export type RegisterInput = z.infer<typeof registerSchema>;
+export type LoginInput = z.infer<typeof loginSchema>;
 export type Dashboard = z.infer<typeof dashboardSchema>;
 export type Task = z.infer<typeof taskSchema>;
 export type CreateTask = z.infer<typeof createTaskSchema>;
@@ -210,6 +374,20 @@ export type Reminder = z.infer<typeof reminderSchema>;
 export type HealthProfile = z.infer<typeof healthProfileSchema>;
 export type HealthRecord = z.infer<typeof healthRecordSchema>;
 export type HealthAdvice = z.infer<typeof healthAdviceSchema>;
+export type HealthMode = z.infer<typeof healthModeSchema>;
+export type HealthIntakeItem = z.infer<typeof healthIntakeItemSchema>;
+export type HealthIntakeLog = z.infer<typeof healthIntakeLogSchema>;
+export type SaveHealthIntake = z.infer<typeof saveHealthIntakeSchema>;
+export type HealthAnalysis = z.infer<typeof healthAnalysisSchema>;
+export type HealthPlanMeal = z.infer<typeof healthPlanMealSchema>;
+export type HealthPlanDay = z.infer<typeof healthPlanDaySchema>;
+export type HealthPlan = z.infer<typeof healthPlanSchema>;
+export type HealthAgentResponse = z.infer<typeof healthAgentResponseSchema>;
+export type HealthChatMessage = z.infer<typeof healthChatMessageSchema>;
+export type HealthConversation = z.infer<typeof healthConversationSchema>;
+export type HealthChatRequest = z.infer<typeof healthChatRequestSchema>;
+export type HealthExecutionPlan = z.infer<typeof healthExecutionPlanSchema>;
+export type HealthChatResponse = z.infer<typeof healthChatResponseSchema>;
 export type ExpenseCategory = z.infer<typeof expenseCategorySchema>;
 export type Expense = z.infer<typeof expenseSchema>;
 export type FinanceSummary = z.infer<typeof financeSummarySchema>;

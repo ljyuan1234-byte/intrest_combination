@@ -2,7 +2,7 @@
 
 ## 层级
 
-单元：领域规则、解析、金额、状态机、Policy；集成：API、数据库、队列、对象存储；合约：API 与 contracts；E2E：Web/Android 核心流程；Agent 评测；票务只用模拟页面/测试 App。
+单元：领域规则、解析、金额、状态机、Policy；集成：API、数据库、队列、对象存储；合约：API 与 contracts；E2E：Web 与手机浏览器核心流程；Agent 评测；票务只用模拟页面/测试环境。
 
 ## P0 用例
 

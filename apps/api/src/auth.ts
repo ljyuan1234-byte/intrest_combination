@@ -2,16 +2,16 @@ import { createHash, randomBytes } from 'node:crypto';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { and, eq, gt, isNull } from 'drizzle-orm';
 import type { Database } from '@life/database';
-import { auditLogs, loginChallenges, sessions, users } from '@life/database/schema';
+import { auditLogs, sessions, users } from '@life/database/schema';
 import type { AppConfig } from './config.js';
 
 const SESSION_COOKIE = 'life_session';
 const SESSION_DURATION_MS = 1000 * 60 * 60 * 24 * 30;
-const CHALLENGE_DURATION_MS = 1000 * 60 * 10;
 
 export type CurrentUser = {
   id: string;
-  email: string;
+  email: string | null;
+  phone: string | null;
   displayName: string | null;
 };
 
@@ -23,7 +23,15 @@ function createToken(): string {
   return randomBytes(32).toString('base64url');
 }
 
-function getClientIp(request: FastifyRequest): string | null {
+/**
+ * Web 客户端只通过 HttpOnly Cookie 携带会话。
+ * 不再支持 Authorization: Bearer，避免在纯 Web 产品中保留第二套凭证入口。
+ */
+function resolveSessionToken(request: FastifyRequest): string | null {
+  return request.cookies[SESSION_COOKIE] ?? null;
+}
+
+export function getClientIp(request: FastifyRequest): string | null {
   const forwarded = request.headers['x-forwarded-for'];
   const value = Array.isArray(forwarded) ? forwarded[0] : forwarded;
   return value?.split(',')[0]?.trim() ?? request.ip ?? null;
@@ -45,72 +53,16 @@ export async function writeAuditLog(
   });
 }
 
-export async function createLoginChallenge(
-  db: Database,
-  request: FastifyRequest,
-  email: string,
-): Promise<{ token: string; expiresAt: Date }> {
-  const token = createToken();
-  const expiresAt = new Date(Date.now() + CHALLENGE_DURATION_MS);
-
-  await db.insert(loginChallenges).values({
-    email,
-    tokenHash: hashToken(token),
-    expiresAt,
-  });
-
-  await writeAuditLog(db, request, 'auth.login_challenge_created', undefined, { email });
-
-  return { token, expiresAt };
-}
-
-export async function consumeLoginChallenge(
-  db: Database,
-  request: FastifyRequest,
-  token: string,
-): Promise<CurrentUser | null> {
-  const now = new Date();
-  const [challenge] = await db
-    .select()
-    .from(loginChallenges)
-    .where(
-      and(
-        eq(loginChallenges.tokenHash, hashToken(token)),
-        isNull(loginChallenges.consumedAt),
-        gt(loginChallenges.expiresAt, now),
-      ),
-    )
-    .limit(1);
-
-  if (!challenge) {
-    await writeAuditLog(db, request, 'auth.login_challenge_rejected');
-    return null;
-  }
-
-  const [user] = await db
-    .insert(users)
-    .values({ email: challenge.email })
-    .onConflictDoUpdate({
-      target: users.email,
-      set: { updatedAt: now },
-    })
-    .returning();
-
-  await db
-    .update(loginChallenges)
-    .set({ consumedAt: now })
-    .where(and(eq(loginChallenges.id, challenge.id), isNull(loginChallenges.consumedAt)));
-
-  await writeAuditLog(db, request, 'auth.login_challenge_consumed', user.id);
-  return user;
-}
-
+/**
+ * 创建 Web 会话，并下发 HttpOnly、SameSite=Lax 的 Cookie。
+ * 明文 token 只存在于 Set-Cookie 响应头中，数据库仅保存 SHA-256 哈希。
+ */
 export async function createSession(
   db: Database,
   reply: FastifyReply,
   config: AppConfig,
-  user: CurrentUser,
-): Promise<void> {
+  user: Pick<CurrentUser, 'id'>,
+): Promise<{ token: string; expiresAt: Date }> {
   const token = createToken();
   const expiresAt = new Date(Date.now() + SESSION_DURATION_MS);
 
@@ -127,16 +79,19 @@ export async function createSession(
     path: '/',
     expires: expiresAt,
   });
+
+  return { token, expiresAt };
 }
 
 export async function getCurrentUser(db: Database, request: FastifyRequest): Promise<CurrentUser | null> {
-  const token = request.cookies[SESSION_COOKIE];
+  const token = resolveSessionToken(request);
   if (!token) return null;
 
   const [result] = await db
     .select({
       id: users.id,
       email: users.email,
+      phone: users.phone,
       displayName: users.displayName,
     })
     .from(sessions)
@@ -160,7 +115,7 @@ export async function revokeCurrentSession(
   reply: FastifyReply,
   config: AppConfig,
 ): Promise<void> {
-  const token = request.cookies[SESSION_COOKIE];
+  const token = resolveSessionToken(request);
 
   if (token) {
     await db
@@ -169,10 +124,12 @@ export async function revokeCurrentSession(
       .where(and(eq(sessions.tokenHash, hashToken(token)), isNull(sessions.revokedAt)));
   }
 
-  reply.clearCookie(SESSION_COOKIE, {
-    httpOnly: true,
-    sameSite: 'lax',
-    secure: config.NODE_ENV === 'production',
-    path: '/',
-  });
+  if (request.cookies[SESSION_COOKIE]) {
+    reply.clearCookie(SESSION_COOKIE, {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: config.NODE_ENV === 'production',
+      path: '/',
+    });
+  }
 }

@@ -2,6 +2,9 @@
   "name": "personal-life-assistant",
   "private": true,
   "packageManager": "pnpm@9.15.4",
+  "engines": {
+    "node": ">=22.9"
+  },
   "scripts": {
     "dev": "corepack pnpm --parallel --filter @life/api --filter @life/web dev",
     "build": "corepack pnpm -r build",

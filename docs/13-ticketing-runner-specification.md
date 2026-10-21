@@ -1,17 +1,17 @@
 # 票务 Runner 规范
 
-目标：12306 Web/Android、大麦 Web/Android；其他平台逐个评估。
+目标：12306 Web、大麦 Web；其他平台逐个评估。所有页面辅助操作都在用户自己的浏览器中执行。
 
 ## 架构
 
-Ticketing Mini App -> Ticketing API -> Orchestrator -> 用户设备 Local Runner -> 平台页面/App。云端只保存配置、状态、候选摘要、通知和审批，不保存登录态，不远程控制设备。
+Ticketing Mini App -> Ticketing API -> Orchestrator -> 用户设备 Local Runner -> 平台 Web 页面。云端只保存配置、状态、候选摘要、通知和审批，不保存登录态，不远程控制设备。
 
 ## 适配器
 
 ```ts
 interface TicketingAdapter {
   platform: 'railway-12306' | 'damai' | string;
-  surface: 'web' | 'android';
+  surface: 'web';
   start(criteria: SearchCriteria): Promise<void>;
   readCandidates(): Promise<TicketCandidate[]>;
   selectCandidate(id: string): Promise<void>;
@@ -21,7 +21,7 @@ interface TicketingAdapter {
 }
 ```
 
-分别实现 `Railway12306WebAdapter`、`Railway12306AndroidAdapter`、`DamaiWebAdapter`、`DamaiAndroidAdapter`，不共用页面脚本。
+分别实现 `Railway12306WebAdapter`、`DamaiWebAdapter`，不共用页面脚本。
 
 ## 状态
 
@@ -35,4 +35,4 @@ Runner 注册获得短期凭证；心跳只上报设备、版本、任务和状�
 
 ## 禁止
 
-不读取 Cookie、Token、密码库、系统凭据或其他应用通知凭据；不访问隐藏接口或签名参数；不绕过验证码、风控或限流；不代替用户支付。实现前须完成 12306/大麦条款、自动化许可、Android 权限和分发评估。
+不读取 Cookie、Token、密码库、系统凭据或其他应用通知凭据；不访问隐藏接口或签名参数；不绕过验证码、风控或限流；不代替用户支付。实现前须完成 12306/大麦条款和自动化许可评估。

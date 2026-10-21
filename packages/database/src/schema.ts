@@ -1,16 +1,22 @@
-import { bigint, doublePrecision, index, jsonb, pgTable, text, timestamp, uniqueIndex, uuid, varchar } from 'drizzle-orm/pg-core';
+import { bigint, doublePrecision, index, integer, jsonb, pgTable, text, timestamp, uniqueIndex, uuid, varchar } from 'drizzle-orm/pg-core';
 
 const createdAt = timestamp('created_at', { withTimezone: true }).defaultNow().notNull();
 const updatedAt = timestamp('updated_at', { withTimezone: true }).defaultNow().notNull();
 
-export const users = pgTable('users', {
-  id: uuid('id').defaultRandom().primaryKey(),
-  email: varchar('email', { length: 320 }).notNull().unique(),
-  displayName: varchar('display_name', { length: 120 }),
-  createdAt,
-  updatedAt,
-  deletedAt: timestamp('deleted_at', { withTimezone: true }),
-});
+export const users = pgTable(
+  'users',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    email: varchar('email', { length: 320 }).unique(),
+    phone: varchar('phone', { length: 20 }),
+    passwordHash: text('password_hash'),
+    displayName: varchar('display_name', { length: 120 }),
+    createdAt,
+    updatedAt,
+    deletedAt: timestamp('deleted_at', { withTimezone: true }),
+  },
+  (table) => [uniqueIndex('users_phone_unique').on(table.phone)],
+);
 
 export const loginChallenges = pgTable(
   'login_challenges',
@@ -123,6 +129,10 @@ export const healthProfiles = pgTable('health_profiles', {
     .references(() => users.id, { onDelete: 'cascade' }),
   heightCm: doublePrecision('height_cm'),
   birthYear: bigint('birth_year', { mode: 'number' }),
+  sex: varchar('sex', { length: 8 }),
+  weightKg: doublePrecision('weight_kg'),
+  targetWeightKg: doublePrecision('target_weight_kg'),
+  activityLevel: varchar('activity_level', { length: 16 }).notNull().default('medium'),
   goal: varchar('goal', { length: 300 }),
   allergies: text('allergies'),
   dietaryPreferences: text('dietary_preferences'),
@@ -153,6 +163,99 @@ export const healthRecords = pgTable(
     index('health_records_user_metric_date_idx').on(table.userId, table.metric, table.localDate),
     index('health_records_user_recorded_at_idx').on(table.userId, table.recordedAt),
   ],
+);
+
+export type HealthIntakeItemRecord = {
+  name: string;
+  raw: string;
+  quantity: number;
+  unit: string;
+  grams: number;
+  calories: number;
+  proteinG: number;
+  carbsG: number;
+  fatG: number;
+  matched: boolean;
+};
+
+export const healthIntakeLogs = pgTable(
+  'health_intake_logs',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    localDate: varchar('local_date', { length: 10 }).notNull(),
+    mode: varchar('mode', { length: 16 }).notNull().default('wellness'),
+    rawText: text('raw_text').notNull(),
+    waterMl: integer('water_ml').notNull().default(0),
+    totalCalories: integer('total_calories').notNull().default(0),
+    proteinG: doublePrecision('protein_g').notNull().default(0),
+    carbsG: doublePrecision('carbs_g').notNull().default(0),
+    fatG: doublePrecision('fat_g').notNull().default(0),
+    items: jsonb('items').$type<HealthIntakeItemRecord[]>().notNull().default([]),
+    createdAt,
+    updatedAt,
+  },
+  (table) => [
+    uniqueIndex('health_intake_logs_user_date_unique').on(table.userId, table.localDate),
+    index('health_intake_logs_user_updated_at_idx').on(table.userId, table.updatedAt),
+  ],
+);
+
+export const healthConversations = pgTable(
+  'health_conversations',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    mode: varchar('mode', { length: 16 }).notNull().default('wellness'),
+    title: varchar('title', { length: 200 }).notNull().default('健康对话'),
+    createdAt,
+    updatedAt,
+  },
+  (table) => [index('health_conversations_user_updated_at_idx').on(table.userId, table.updatedAt)],
+);
+
+export const healthMessages = pgTable(
+  'health_messages',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    conversationId: uuid('conversation_id')
+      .notNull()
+      .references(() => healthConversations.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    role: varchar('role', { length: 16 }).notNull(),
+    content: text('content').notNull(),
+    metadata: jsonb('metadata').notNull().default({}),
+    createdAt,
+  },
+  (table) => [
+    index('health_messages_conversation_created_at_idx').on(table.conversationId, table.createdAt),
+    index('health_messages_user_created_at_idx').on(table.userId, table.createdAt),
+  ],
+);
+
+export const healthMemoryChunks = pgTable(
+  'health_memory_chunks',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    conversationId: uuid('conversation_id')
+      .notNull()
+      .references(() => healthConversations.id, { onDelete: 'cascade' }),
+    messageId: uuid('message_id').references(() => healthMessages.id, { onDelete: 'cascade' }),
+    content: text('content').notNull(),
+    keywords: text('keywords').notNull().default(''),
+    embedding: jsonb('embedding').$type<number[] | null>(),
+    createdAt,
+  },
+  (table) => [index('health_memory_chunks_user_created_at_idx').on(table.userId, table.createdAt)],
 );
 
 export const expenseCategories = pgTable(

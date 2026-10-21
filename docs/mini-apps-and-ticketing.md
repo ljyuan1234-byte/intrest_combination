@@ -47,17 +47,17 @@ type MiniAppManifest = {
 
 首期不接入真实票务账号，不执行购票。后续目标平台包括：
 
-- 铁路票：12306 网页和 Android App。
-- 演出票：大麦等演出平台的网页和 Android App。
+- 铁路票：12306 网页。
+- 演出票：大麦等演出平台的网页。
 
 铁路和演出票务必须分别实现适配器。不同平台的页面结构、登录方式、订单规则和服务条款不能假设相同。
 
 ## 3. 票务子系统架构
 
-票务页面操作必须在用户自己的浏览器或 Android 设备上执行。云端不保存页面登录态，也不直接远程控制用户设备。
+票务页面操作必须在用户自己的浏览器中执行。云端不保存页面登录态，也不直接远程控制用户设备。
 
 ```text
-Android App / Web 控制台
+Web 控制台
         |
         | 任务配置、状态同步、用户确认
         v
@@ -67,12 +67,11 @@ Android App / Web 控制台
         |
 本地 Ticketing Runner
   - Browser Adapter
-  - Android Accessibility/Appium Adapter
   - 页面状态识别
   - 本地停止按钮
         |
         v
-12306 / 大麦等用户已打开并授权的页面或 App
+12306 / 大麦等用户已打开并授权的页面
 ```
 
 ### 3.1 云端职责
@@ -86,13 +85,13 @@ Android App / Web 控制台
 ### 3.2 本地 Runner 职责
 
 - 在用户主动启动任务后运行。
-- 读取页面或 App 当前可见的票务信息。
+- 读取当前浏览器页面中可见的票务信息。
 - 进行筛选、页面跳转和允许的表单辅助填写。
 - 检测验证码、人机验证、登录失效和页面结构变化。
 - 遇到高风险状态立即暂停并要求用户接管。
 - 提供本地全局停止按钮和任务超时保护。
 
-网页端可以采用浏览器扩展或本地辅助程序；Android 端可以评估 Android Accessibility Service 或经过平台允许的自动化测试能力。具体实现必须逐个平台确认服务条款、应用权限和分发要求。
+网页端可以采用浏览器扩展或本地辅助程序。具体实现必须逐个平台确认服务条款和自动化许可。
 
 ### 3.3 平台适配器
 
@@ -101,7 +100,7 @@ Android App / Web 控制台
 ```ts
 interface TicketingAdapter {
   platform: 'railway-12306' | 'damai' | string;
-  surface: 'web' | 'android';
+  surface: 'web';
   start(criteria: SearchCriteria): Promise<void>;
   readCandidates(): Promise<TicketCandidate[]>;
   selectCandidate(candidateId: string): Promise<void>;
@@ -113,11 +112,11 @@ interface TicketingAdapter {
 
 推荐适配器矩阵：
 
-| 平台 | 网页 | Android | 备注 |
-|---|---|---|---|
-| 12306 | `Railway12306WebAdapter` | `Railway12306AndroidAdapter` | 铁路票独立实现，不能复用演出规则 |
-| 大麦 | `DamaiWebAdapter` | `DamaiAndroidAdapter` | 演出票订单、座位和购票规则独立处理 |
-| 其他演出平台 | 独立适配器 | 独立适配器 | 逐个平台评估，不做通用抓取器 |
+| 平台 | 网页适配器 | 备注 |
+|---|---|---|
+| 12306 | `Railway12306WebAdapter` | 铁路票独立实现，不能复用演出规则 |
+| 大麦 | `DamaiWebAdapter` | 演出票订单、座位和购票规则独立处理 |
+| 其他演出平台 | 独立适配器 | 逐个平台评估，不做通用抓取器 |
 
 ## 4. 票务能力分阶段路线
 

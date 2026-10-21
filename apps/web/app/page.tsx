@@ -74,6 +74,7 @@ export default function HomePage() {
           <a className="text-link" href="/tasks">管理待办</a>
           <a className="text-link" href="/calendar">日程提醒</a>
           <a className="text-link" href="/health">健康记录</a>
+          <a className="text-link" href="/health/agent">健康 Agent</a>
           <a className="text-link" href="/finance">手动记账</a>
           <a className="text-link" href="/settings/data">数据账户</a>
           <div className="date-chip">{dashboard.date}</div>
@@ -108,7 +109,7 @@ export default function HomePage() {
             <span className="status-dot">● 在线</span>
           </div>
           <p className="advice">{dashboard.health.suggestion}</p>
-          <button className="primary-button" type="button">记录一条数据</button>
+          <a className="primary-button" href="/health">记录一条数据</a>
         </article>
 
         <article className="panel modules-panel">
@@ -117,7 +118,7 @@ export default function HomePage() {
               <p className="eyebrow">MODULES</p>
               <h2>你的工具箱</h2>
             </div>
-            <button className="text-button" type="button">管理</button>
+            <button className="text-button" type="button" onClick={() => window.location.assign('/settings/data')}>管理</button>
           </div>
           <div className="module-list">
             {dashboard.modules.map((module) => (

@@ -2,7 +2,7 @@
 
 ## 认证
 
-首期使用邮箱一次性登录链接或受信任认证服务，不自行存储密码。服务端使用 HttpOnly、Secure、SameSite 会话 Cookie，数据库只存 Token 哈希。Android 使用安全存储。
+使用邮箱或手机号 + 密码注册/登录。密码使用 Node 内置 scrypt 派生，数据库只保存哈希；邮箱统一小写，手机号统一 E.164。服务端使用 HttpOnly、Secure、SameSite 会话 Cookie，数据库只存 Session Token 哈希。Web 与手机浏览器共用同一套 Cookie 会话。登录失败按 IP + 标识符限流。
 
 ## 会话
 

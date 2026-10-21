@@ -5,13 +5,14 @@
 ## 已确认决策
 
 - 首期用户为个人，数据模型保留 `user_id`。
-- 客户端为 Android App + 桌面浏览器 Web。
-- 云端托管；通知使用 Android 推送和 Web Push，不依赖微信。
+- 客户端为桌面浏览器 + 手机浏览器（PWA）。
+- 云端托管；数据库使用腾讯云 PostgreSQL 16，API 与 Web 以 Docker 部署在腾讯云 CVM/Lighthouse。
+- 通知使用 Web Push，不依赖微信；提醒 Worker 后续实现。
 - 健康数据由用户手动录入或上传，包含步数、睡眠、饮水、体重、锻炼和饮食记录。
 - 财务首期只做手动记账、分类和统计。
 - Agent 首期只读和建议；写入必须用户审批。
 - Mini App 首期使用内置注册表和统一容器，不执行任意第三方代码。
-- 票务长期覆盖 12306 和大麦等平台的 Web/Android 页面辅助操作；操作在用户设备本地执行，云端不代管登录态。
+- 票务长期覆盖 12306 和大麦等平台的 Web 页面辅助操作；操作在用户设备本地执行，云端不代管登录态。
 - 不读取 Cookie、Token、密码库或支付密钥，不绕过验证码、风控、登录保护或支付流程。
 
 ## 交付文档
@@ -27,7 +28,7 @@
 | [07-auth-and-permissions.md](./07-auth-and-permissions.md) | 认证、会话、权限和审批 |
 | [08-health-module.md](./08-health-module.md) | 健康字段、上传和建议 |
 | [09-finance-module.md](./09-finance-module.md) | 记账、分类和统计 |
-| [10-notification-module.md](./10-notification-module.md) | Android/Web 通知和提醒 |
+| [10-notification-module.md](./10-notification-module.md) | Web Push 通知和提醒 |
 | [11-agent-specification.md](./11-agent-specification.md) | Agent 模型、工具和评测 |
 | [12-mini-app-specification.md](./12-mini-app-specification.md) | Mini App 容器和生命周期 |
 | [13-ticketing-runner-specification.md](./13-ticketing-runner-specification.md) | 12306/大麦本地 Runner |
@@ -39,7 +40,7 @@
 
 ## 技术基线
 
-pnpm workspace、Next.js、Expo React Native、Fastify、PostgreSQL、Drizzle、Redis/BullMQ、S3、Zod。首期采用模块化单体：API、Worker、数据库、Web 和 Android。客户端使用轮询或 SSE，不优先上 WebSocket。
+pnpm workspace、Next.js、Fastify、PostgreSQL、Drizzle、Zod。部署采用模块化单体：API、Web、数据库；对象存储与通知在后续阶段接入。客户端使用轮询或 SSE，不优先上 WebSocket。腾讯云 PostgreSQL 的连接、SSL 与迁移说明见 [22-web-only-and-tencent-cloud.md](./22-web-only-and-tencent-cloud.md)。
 
 ## 开发顺序
 

@@ -1,6 +1,7 @@
 import cookie from '@fastify/cookie';
 import cors from '@fastify/cors';
-import { and, eq, isNull, sql } from 'drizzle-orm';
+import { readFileSync } from 'node:fs';
+import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import Fastify from 'fastify';
 import {
   createCalendarEventSchema,
@@ -15,9 +16,18 @@ import {
   expenseSchema,
   financeSummarySchema,
   healthAdviceSchema,
+  healthAgentResponseSchema,
+  healthChatRequestSchema,
+  healthChatResponseSchema,
+  healthConversationSchema,
+  healthIntakeLogSchema,
+  healthModeSchema,
   healthProfileSchema,
   healthRecordSchema,
+  loginSchema,
+  registerSchema,
   reminderSchema,
+  saveHealthIntakeSchema,
   taskSchema,
   updateCalendarEventSchema,
   updateExpenseSchema,
@@ -31,6 +41,10 @@ import {
   devices,
   expenseCategories,
   expenses,
+  healthIntakeLogs,
+  healthMemoryChunks,
+  healthMessages,
+  healthConversations,
   healthProfiles,
   healthRecords,
   idempotencyKeys,
@@ -41,29 +55,38 @@ import {
 } from '@life/database/schema';
 import { z } from 'zod';
 import {
-  consumeLoginChallenge,
-  createLoginChallenge,
   createSession,
+  getClientIp,
   getCurrentUser,
   revokeCurrentSession,
   writeAuditLog,
 } from './auth.js';
 import { readConfig } from './config.js';
+import { composeChatReply } from './health-agent/chat.js';
+import { embedTexts, isEmbeddingConfigured } from './health-agent/embedding.js';
+import { parseFoodText, runHealthAgent } from './health-agent/index.js';
+import { chunkText, retrieveMemoryHybrid, tokenize } from './health-agent/memory.js';
+import { parseDailyMetrics } from './health-agent/metrics.js';
+import { parseIdentity } from './identity.js';
+import { clearLoginFailures, isLoginBlocked, recordLoginFailure } from './login-rate-limit.js';
+import { hashPassword, verifyPassword } from './password.js';
 
 const config = readConfig();
-const db = createDatabase(config.DATABASE_URL);
+const databaseSsl = config.DATABASE_SSL
+  ? {
+      rejectUnauthorized: config.DATABASE_SSL_REJECT_UNAUTHORIZED,
+      ...(config.DATABASE_SSL_CA ? { ca: readFileSync(config.DATABASE_SSL_CA, 'utf8') } : {}),
+    }
+  : undefined;
+
+const db = createDatabase(config.DATABASE_URL, {
+  poolMax: config.DATABASE_POOL_MAX,
+  ssl: databaseSsl,
+});
 const app = Fastify({
   logger: {
     redact: ['req.headers.cookie', 'req.headers.authorization'],
   },
-});
-
-const emailSchema = z.object({
-  email: z.string().trim().email().max(320).transform((email) => email.toLowerCase()),
-});
-
-const verifySchema = z.object({
-  token: z.string().min(32).max(256),
 });
 
 const profileSchema = z.object({
@@ -91,9 +114,17 @@ function serializeTask(task: typeof tasks.$inferSelect) {
 }
 
 function serializeHealthProfile(profile: typeof healthProfiles.$inferSelect) {
+  const sex = profile.sex === 'male' || profile.sex === 'female' || profile.sex === 'other' ? profile.sex : null;
+  const activityLevel =
+    profile.activityLevel === 'low' || profile.activityLevel === 'high' ? profile.activityLevel : 'medium';
+
   return healthProfileSchema.parse({
     heightCm: profile.heightCm,
     birthYear: profile.birthYear,
+    sex,
+    weightKg: profile.weightKg,
+    targetWeightKg: profile.targetWeightKg,
+    activityLevel,
     goal: profile.goal,
     allergies: profile.allergies,
     dietaryPreferences: profile.dietaryPreferences,
@@ -101,6 +132,206 @@ function serializeHealthProfile(profile: typeof healthProfiles.$inferSelect) {
     availableTime: profile.availableTime,
     updatedAt: profile.updatedAt.toISOString(),
   });
+}
+
+function serializeHealthIntake(log: typeof healthIntakeLogs.$inferSelect) {
+  return healthIntakeLogSchema.parse({
+    id: log.id,
+    localDate: log.localDate,
+    mode: log.mode === 'fat_loss' ? 'fat_loss' : 'wellness',
+    rawText: log.rawText,
+    waterMl: log.waterMl,
+    totalCalories: log.totalCalories,
+    proteinG: log.proteinG,
+    carbsG: log.carbsG,
+    fatG: log.fatG,
+    items: log.items,
+    updatedAt: log.updatedAt.toISOString(),
+  });
+}
+
+function todayInShanghai(): string {
+  return new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Shanghai' }).format(new Date());
+}
+
+async function buildHealthAgentResponse(
+  userId: string,
+  date: string,
+  requestedMode: 'wellness' | 'fat_loss',
+) {
+  const [[profileRow], [weightRow], [intakeRow], dailyMetricRows] = await Promise.all([
+    db.select().from(healthProfiles).where(eq(healthProfiles.userId, userId)).limit(1),
+    db
+      .select({ valueNumber: healthRecords.valueNumber })
+      .from(healthRecords)
+      .where(
+        and(
+          eq(healthRecords.userId, userId),
+          eq(healthRecords.metric, 'weight'),
+          isNull(healthRecords.deletedAt),
+        ),
+      )
+      .orderBy(desc(healthRecords.recordedAt))
+      .limit(1),
+    db
+      .select()
+      .from(healthIntakeLogs)
+      .where(and(eq(healthIntakeLogs.userId, userId), eq(healthIntakeLogs.localDate, date)))
+      .limit(1),
+    db
+      .select({
+        metric: healthRecords.metric,
+        valueNumber: healthRecords.valueNumber,
+      })
+      .from(healthRecords)
+      .where(
+        and(
+          eq(healthRecords.userId, userId),
+          eq(healthRecords.localDate, date),
+          inArray(healthRecords.metric, ['weight', 'sleep', 'exercise']),
+          isNull(healthRecords.deletedAt),
+        ),
+      )
+      .orderBy(desc(healthRecords.recordedAt)),
+  ]);
+
+  const latestMetric = (metric: string) =>
+    dailyMetricRows.find((row) => row.metric === metric)?.valueNumber ?? null;
+
+  const intake = intakeRow ? serializeHealthIntake(intakeRow) : null;
+  const mode = intake?.mode ?? requestedMode;
+  const { analysis, plan } = runHealthAgent({
+    profile: profileRow ? serializeHealthProfile(profileRow) : null,
+    latestWeightKg: weightRow?.valueNumber ?? null,
+    intake,
+    metrics: {
+      weightKg: latestMetric('weight'),
+      sleepMinutes: latestMetric('sleep'),
+      exerciseMinutes: latestMetric('exercise'),
+    },
+    mode,
+    date,
+  });
+
+  return healthAgentResponseSchema.parse({ intake, analysis, plan });
+}
+
+async function appendHealthIntake(
+  userId: string,
+  input: { localDate: string; mode: 'wellness' | 'fat_loss'; text: string; waterMl: number },
+) {
+  const food = parseFoodText(input.text);
+  const now = new Date();
+  const [existing] = await db
+    .select()
+    .from(healthIntakeLogs)
+    .where(and(eq(healthIntakeLogs.userId, userId), eq(healthIntakeLogs.localDate, input.localDate)))
+    .limit(1);
+
+  if (existing) {
+    const separator = existing.rawText && input.text ? '\n' : '';
+    await db
+      .update(healthIntakeLogs)
+      .set({
+        mode: input.mode,
+        rawText: `${existing.rawText}${separator}${input.text}`.trim(),
+        waterMl: existing.waterMl + input.waterMl,
+        totalCalories: existing.totalCalories + food.totals.calories,
+        proteinG: Math.round((existing.proteinG + food.totals.proteinG) * 10) / 10,
+        carbsG: Math.round((existing.carbsG + food.totals.carbsG) * 10) / 10,
+        fatG: Math.round((existing.fatG + food.totals.fatG) * 10) / 10,
+        items: [...existing.items, ...food.items],
+        updatedAt: now,
+      })
+      .where(eq(healthIntakeLogs.id, existing.id));
+  } else {
+    await db.insert(healthIntakeLogs).values({
+      userId,
+      localDate: input.localDate,
+      mode: input.mode,
+      rawText: input.text,
+      waterMl: input.waterMl,
+      totalCalories: food.totals.calories,
+      proteinG: food.totals.proteinG,
+      carbsG: food.totals.carbsG,
+      fatG: food.totals.fatG,
+      items: food.items,
+      updatedAt: now,
+    });
+  }
+
+  return food;
+}
+
+function serializeChatMessage(message: typeof healthMessages.$inferSelect) {
+  const role =
+    message.role === 'user' || message.role === 'assistant' || message.role === 'tool' || message.role === 'system'
+      ? message.role
+      : 'assistant';
+
+  return {
+    id: message.id,
+    role,
+    content: message.content,
+    createdAt: message.createdAt.toISOString(),
+  };
+}
+
+function serializeConversation(conversation: typeof healthConversations.$inferSelect) {
+  return healthConversationSchema.parse({
+    id: conversation.id,
+    mode: conversation.mode === 'fat_loss' ? 'fat_loss' : 'wellness',
+    title: conversation.title,
+    updatedAt: conversation.updatedAt.toISOString(),
+  });
+}
+
+async function getOrCreateConversation(
+  userId: string,
+  conversationId: string | undefined,
+  mode: 'wellness' | 'fat_loss',
+  firstMessage: string,
+) {
+  if (conversationId) {
+    const [existing] = await db
+      .select()
+      .from(healthConversations)
+      .where(and(eq(healthConversations.id, conversationId), eq(healthConversations.userId, userId)))
+      .limit(1);
+    return existing ?? null;
+  }
+
+  const [created] = await db
+    .insert(healthConversations)
+    .values({
+      userId,
+      mode,
+      title: firstMessage.slice(0, 40) || '健康对话',
+    })
+    .returning();
+
+  return created;
+}
+
+async function saveMemoryChunks(
+  userId: string,
+  conversationId: string,
+  messageId: string,
+  content: string,
+) {
+  const chunks = chunkText(content);
+  const embeddings = await embedTexts(config, chunks);
+
+  for (const [index, chunk] of chunks.entries()) {
+    await db.insert(healthMemoryChunks).values({
+      userId,
+      conversationId,
+      messageId,
+      content: chunk,
+      keywords: tokenize(chunk).join(' '),
+      embedding: embeddings?.[index] ?? null,
+    });
+  }
 }
 
 function serializeHealthRecord(record: typeof healthRecords.$inferSelect) {
@@ -212,6 +443,26 @@ function sendError(
   return reply.code(statusCode).send({ error: { code, message }, requestId });
 }
 
+type UserRow = {
+  id: string;
+  email: string | null;
+  phone: string | null;
+  displayName: string | null;
+};
+
+function publicUser(user: UserRow) {
+  return {
+    id: user.id,
+    email: user.email,
+    phone: user.phone,
+    displayName: user.displayName,
+  };
+}
+
+function isUniqueViolation(error: unknown): boolean {
+  return Boolean(error && typeof error === 'object' && 'code' in error && error.code === '23505');
+}
+
 await app.register(cors, {
   origin: config.APP_ORIGIN,
   credentials: true,
@@ -222,47 +473,88 @@ app.addHook('onRequest', async (request, reply) => {
   reply.header('x-request-id', request.id);
 });
 
-app.get('/health', async () => ({ status: 'ok' }));
-
-app.post('/api/v1/auth/login', async (request, reply) => {
-  const parsed = emailSchema.safeParse(request.body);
-  if (!parsed.success) {
-    return sendError(reply, request.id, 400, 'VALIDATION_ERROR', '请提供有效邮箱地址。');
+app.get('/health', async (request, reply) => {
+  try {
+    await db.execute(sql`select 1`);
+    return { status: 'ok', database: 'ok' };
+  } catch (error) {
+    request.log.error({ err: error }, 'Database health check failed');
+    return reply.code(503).send({ status: 'degraded', database: 'down' });
   }
-
-  if (config.NODE_ENV === 'production' && !config.AUTH_DEV_MODE) {
-    return sendError(reply, request.id, 503, 'DEPENDENCY_UNAVAILABLE', '邮件投递服务尚未配置。');
-  }
-
-  const challenge = await createLoginChallenge(db, request, parsed.data.email);
-
-  if (config.AUTH_DEV_MODE) {
-    request.log.info(
-      { authEvent: 'development_login_challenge', email: parsed.data.email, token: challenge.token },
-      'Development-only login challenge created',
-    );
-  }
-
-  return sendData(reply, request.id, {
-    message: '登录链接已生成，请查看已配置的邮箱投递渠道。',
-    expiresAt: challenge.expiresAt.toISOString(),
-  });
 });
 
-app.post('/api/v1/auth/verify', async (request, reply) => {
-  const parsed = verifySchema.safeParse(request.body);
+app.post('/api/v1/auth/register', async (request, reply) => {
+  const parsed = registerSchema.safeParse(request.body);
   if (!parsed.success) {
-    return sendError(reply, request.id, 400, 'VALIDATION_ERROR', '登录凭证无效。');
+    return sendError(reply, request.id, 400, 'VALIDATION_ERROR', parsed.error.issues[0]?.message ?? '注册信息无效。');
   }
 
-  const user = await consumeLoginChallenge(db, request, parsed.data.token);
-  if (!user) {
-    return sendError(reply, request.id, 401, 'UNAUTHENTICATED', '登录凭证无效或已过期。');
+  const identity = parseIdentity(parsed.data.identifier);
+  if (!identity) {
+    return sendError(reply, request.id, 400, 'VALIDATION_ERROR', '请输入有效的邮箱或手机号。');
   }
 
+  try {
+    const passwordHash = await hashPassword(parsed.data.password);
+    const [user] = await db
+      .insert(users)
+      .values({
+        email: identity.kind === 'email' ? identity.email : null,
+        phone: identity.kind === 'phone' ? identity.phone : null,
+        passwordHash,
+        displayName: parsed.data.displayName ?? null,
+      })
+      .returning();
+
+    await createSession(db, reply, config, user);
+    await writeAuditLog(db, request, 'auth.registered', user.id, { method: identity.kind });
+
+    return reply.code(201).send({ data: { user: publicUser(user) }, requestId: request.id });
+  } catch (error) {
+    if (isUniqueViolation(error)) {
+      return sendError(reply, request.id, 409, 'CONFLICT', '该邮箱或手机号已注册。');
+    }
+    throw error;
+  }
+});
+
+app.post('/api/v1/auth/login', async (request, reply) => {
+  const parsed = loginSchema.safeParse(request.body);
+  if (!parsed.success) {
+    return sendError(reply, request.id, 400, 'VALIDATION_ERROR', '请输入账号和密码。');
+  }
+
+  const identity = parseIdentity(parsed.data.identifier);
+  if (!identity) {
+    return sendError(reply, request.id, 400, 'VALIDATION_ERROR', '请输入有效的邮箱或手机号。');
+  }
+
+  const rateLimitKey = `${getClientIp(request) ?? 'unknown'}:${identity.value}`;
+  if (isLoginBlocked(rateLimitKey)) {
+    await writeAuditLog(db, request, 'auth.login_rate_limited');
+    return sendError(reply, request.id, 429, 'RATE_LIMITED', '尝试次数过多，请 15 分钟后再试。');
+  }
+
+  const [user] = await db
+    .select()
+    .from(users)
+    .where(identity.kind === 'email' ? eq(users.email, identity.email) : eq(users.phone, identity.phone))
+    .limit(1);
+
+  const passwordValid = Boolean(
+    user && !user.deletedAt && (await verifyPassword(parsed.data.password, user.passwordHash)),
+  );
+
+  if (!passwordValid) {
+    recordLoginFailure(rateLimitKey);
+    await writeAuditLog(db, request, 'auth.login_failed', user?.id);
+    return sendError(reply, request.id, 401, 'UNAUTHENTICATED', '邮箱/手机号或密码错误。');
+  }
+
+  clearLoginFailures(rateLimitKey);
   await createSession(db, reply, config, user);
   await writeAuditLog(db, request, 'auth.login_succeeded', user.id);
-  return sendData(reply, request.id, { user });
+  return sendData(reply, request.id, { user: publicUser(user) });
 });
 
 app.post('/api/v1/auth/logout', async (request, reply) => {
@@ -372,6 +664,7 @@ app.get('/api/v1/me/export', async (request, reply) => {
       ? {
           id: userProfile.id,
           email: userProfile.email,
+          phone: userProfile.phone,
           displayName: userProfile.displayName,
           createdAt: userProfile.createdAt.toISOString(),
         }
@@ -713,6 +1006,10 @@ app.put('/api/v1/health/profile', async (request, reply) => {
       userId: user.id,
       heightCm: parsed.data.heightCm ?? null,
       birthYear: parsed.data.birthYear ?? null,
+      sex: parsed.data.sex ?? null,
+      weightKg: parsed.data.weightKg ?? null,
+      targetWeightKg: parsed.data.targetWeightKg ?? null,
+      activityLevel: parsed.data.activityLevel ?? 'medium',
       goal: parsed.data.goal ?? null,
       allergies: parsed.data.allergies ?? null,
       dietaryPreferences: parsed.data.dietaryPreferences ?? null,
@@ -725,6 +1022,10 @@ app.put('/api/v1/health/profile', async (request, reply) => {
       set: {
         heightCm: parsed.data.heightCm,
         birthYear: parsed.data.birthYear,
+        sex: parsed.data.sex,
+        weightKg: parsed.data.weightKg,
+        targetWeightKg: parsed.data.targetWeightKg,
+        activityLevel: parsed.data.activityLevel,
         goal: parsed.data.goal,
         allergies: parsed.data.allergies,
         dietaryPreferences: parsed.data.dietaryPreferences,
@@ -842,6 +1143,304 @@ app.get('/api/v1/health/advice', async (request, reply) => {
   });
 
   return sendData(reply, request.id, advice);
+});
+
+app.get('/api/v1/health/agent', async (request, reply) => {
+  const user = await getCurrentUser(db, request);
+  if (!user) return sendError(reply, request.id, 401, 'UNAUTHENTICATED', '需要登录。');
+
+  const parsed = z
+    .object({
+      date: z.string().date().optional(),
+      mode: healthModeSchema.optional(),
+    })
+    .safeParse(request.query);
+
+  if (!parsed.success) {
+    return sendError(reply, request.id, 400, 'VALIDATION_ERROR', '日期或模式无效。');
+  }
+
+  const date = parsed.data.date ?? todayInShanghai();
+  const response = await buildHealthAgentResponse(user.id, date, parsed.data.mode ?? 'wellness');
+  return sendData(reply, request.id, response);
+});
+
+app.put('/api/v1/health/agent/intake', async (request, reply) => {
+  const user = await getCurrentUser(db, request);
+  if (!user) return sendError(reply, request.id, 401, 'UNAUTHENTICATED', '需要登录。');
+
+  const parsed = saveHealthIntakeSchema.safeParse(request.body);
+  if (!parsed.success) {
+    return sendError(reply, request.id, 400, 'VALIDATION_ERROR', parsed.error.issues[0]?.message ?? '饮食记录无效。');
+  }
+
+  const food = parseFoodText(parsed.data.text);
+  const now = new Date();
+
+  const [log] = await db
+    .insert(healthIntakeLogs)
+    .values({
+      userId: user.id,
+      localDate: parsed.data.localDate,
+      mode: parsed.data.mode,
+      rawText: parsed.data.text,
+      waterMl: parsed.data.waterMl,
+      totalCalories: food.totals.calories,
+      proteinG: food.totals.proteinG,
+      carbsG: food.totals.carbsG,
+      fatG: food.totals.fatG,
+      items: food.items,
+      updatedAt: now,
+    })
+    .onConflictDoUpdate({
+      target: [healthIntakeLogs.userId, healthIntakeLogs.localDate],
+      set: {
+        mode: parsed.data.mode,
+        rawText: parsed.data.text,
+        waterMl: parsed.data.waterMl,
+        totalCalories: food.totals.calories,
+        proteinG: food.totals.proteinG,
+        carbsG: food.totals.carbsG,
+        fatG: food.totals.fatG,
+        items: food.items,
+        updatedAt: now,
+      },
+    })
+    .returning();
+
+  await writeAuditLog(db, request, 'health.agent_intake_saved', user.id, {
+    date: parsed.data.localDate,
+    mode: parsed.data.mode,
+    calories: food.totals.calories,
+  });
+
+  const response = await buildHealthAgentResponse(user.id, parsed.data.localDate, parsed.data.mode);
+  return sendData(reply, request.id, response);
+});
+
+app.post('/api/v1/health/agent/intake', async (request, reply) => {
+  const user = await getCurrentUser(db, request);
+  if (!user) return sendError(reply, request.id, 401, 'UNAUTHENTICATED', '需要登录。');
+
+  const parsed = saveHealthIntakeSchema.safeParse(request.body);
+  if (!parsed.success) {
+    return sendError(reply, request.id, 400, 'VALIDATION_ERROR', parsed.error.issues[0]?.message ?? '饮食记录无效。');
+  }
+
+  const food = await appendHealthIntake(user.id, {
+    localDate: parsed.data.localDate,
+    mode: parsed.data.mode,
+    text: parsed.data.text,
+    waterMl: parsed.data.waterMl,
+  });
+
+  await writeAuditLog(db, request, 'health.agent_intake_appended', user.id, {
+    date: parsed.data.localDate,
+    mode: parsed.data.mode,
+    calories: food.totals.calories,
+  });
+
+  const response = await buildHealthAgentResponse(user.id, parsed.data.localDate, parsed.data.mode);
+  return sendData(reply, request.id, response);
+});
+
+app.get('/api/v1/health/chat', async (request, reply) => {
+  const user = await getCurrentUser(db, request);
+  if (!user) return sendError(reply, request.id, 401, 'UNAUTHENTICATED', '需要登录。');
+
+  const parsed = z
+    .object({ conversationId: z.string().uuid().optional() })
+    .safeParse(request.query);
+  if (!parsed.success) return sendError(reply, request.id, 400, 'VALIDATION_ERROR', '会话标识无效。');
+
+  const [conversation] = parsed.data.conversationId
+    ? await db
+        .select()
+        .from(healthConversations)
+        .where(
+          and(
+            eq(healthConversations.id, parsed.data.conversationId),
+            eq(healthConversations.userId, user.id),
+          ),
+        )
+        .limit(1)
+    : await db
+        .select()
+        .from(healthConversations)
+        .where(eq(healthConversations.userId, user.id))
+        .orderBy(desc(healthConversations.updatedAt))
+        .limit(1);
+
+  if (!conversation) {
+    return sendData(reply, request.id, { conversation: null, messages: [] });
+  }
+
+  const messages = await db
+    .select()
+    .from(healthMessages)
+    .where(eq(healthMessages.conversationId, conversation.id))
+    .orderBy(healthMessages.createdAt)
+    .limit(100);
+
+  return sendData(reply, request.id, {
+    conversation: serializeConversation(conversation),
+    messages: messages.map(serializeChatMessage),
+  });
+});
+
+app.post('/api/v1/health/chat', async (request, reply) => {
+  const user = await getCurrentUser(db, request);
+  if (!user) return sendError(reply, request.id, 401, 'UNAUTHENTICATED', '需要登录。');
+
+  const parsed = healthChatRequestSchema.safeParse(request.body);
+  if (!parsed.success) {
+    return sendError(reply, request.id, 400, 'VALIDATION_ERROR', parsed.error.issues[0]?.message ?? '消息无效。');
+  }
+
+  const date = parsed.data.date ?? todayInShanghai();
+  const conversation = await getOrCreateConversation(
+    user.id,
+    parsed.data.conversationId,
+    parsed.data.mode,
+    parsed.data.message,
+  );
+
+  if (!conversation) {
+    return sendError(reply, request.id, 404, 'NOT_FOUND', '未找到此会话。');
+  }
+
+  const [userMessage] = await db
+    .insert(healthMessages)
+    .values({
+      conversationId: conversation.id,
+      userId: user.id,
+      role: 'user',
+      content: parsed.data.message,
+    })
+    .returning();
+
+  const food = parseFoodText(parsed.data.message);
+  const matchedItems = food.items.filter((item) => item.matched);
+  const dailyMetrics = parseDailyMetrics(parsed.data.message);
+
+  const metricRecords = [
+    { metric: 'weight', valueNumber: dailyMetrics.weightKg, unit: 'kg' },
+    { metric: 'sleep', valueNumber: dailyMetrics.sleepMinutes, unit: 'min' },
+    { metric: 'steps', valueNumber: dailyMetrics.steps, unit: 'count' },
+    { metric: 'exercise', valueNumber: dailyMetrics.exerciseMinutes, unit: 'min' },
+  ].filter((item) => item.valueNumber !== null);
+
+  if (metricRecords.length > 0) {
+    await db.insert(healthRecords).values(
+      metricRecords.map((item) => ({
+        userId: user.id,
+        metric: item.metric,
+        valueNumber: item.valueNumber,
+        unit: item.unit,
+        localDate: date,
+        recordedAt: new Date(),
+        source: 'chat',
+      })),
+    );
+  }
+
+  if (matchedItems.length > 0) {
+    await appendHealthIntake(user.id, {
+      localDate: date,
+      mode: parsed.data.mode,
+      text: parsed.data.message,
+      waterMl: 0,
+    });
+  }
+
+  if (dailyMetrics.waterMl) {
+    await appendHealthIntake(user.id, {
+      localDate: date,
+      mode: parsed.data.mode,
+      text: '',
+      waterMl: dailyMetrics.waterMl,
+    });
+  }
+
+  const state = await buildHealthAgentResponse(user.id, date, parsed.data.mode);
+
+  const memoryRows = await db
+    .select({
+      id: healthMemoryChunks.id,
+      content: healthMemoryChunks.content,
+      conversationId: healthMemoryChunks.conversationId,
+      createdAt: healthMemoryChunks.createdAt,
+      embedding: healthMemoryChunks.embedding,
+    })
+    .from(healthMemoryChunks)
+    .where(eq(healthMemoryChunks.userId, user.id))
+    .orderBy(desc(healthMemoryChunks.createdAt))
+    .limit(300);
+
+  const queryEmbedding = isEmbeddingConfigured(config)
+    ? ((await embedTexts(config, [parsed.data.message]))?.[0] ?? null)
+    : null;
+
+  if (isEmbeddingConfigured(config) && !queryEmbedding) {
+    request.log.warn(
+      { embeddingModel: config.EMBEDDING_MODEL },
+      'Embedding request failed; falling back to lexical retrieval',
+    );
+  }
+
+  const memory = retrieveMemoryHybrid(parsed.data.message, memoryRows, 5, queryEmbedding);
+
+  const { reply: assistantReply, execution } = await composeChatReply({
+    config,
+    message: parsed.data.message,
+    mode: state.analysis.mode,
+    analysis: state.analysis,
+    plan: state.plan,
+    memory,
+    loggedItems: matchedItems.map((item) => ({ name: item.name, calories: item.calories })),
+    unknownCount: food.unknownCount,
+  });
+
+  const [assistantMessage] = await db
+    .insert(healthMessages)
+    .values({
+      conversationId: conversation.id,
+      userId: user.id,
+      role: 'assistant',
+      content: assistantReply,
+      metadata: { execution },
+    })
+    .returning();
+
+  await saveMemoryChunks(user.id, conversation.id, userMessage.id, parsed.data.message);
+  await saveMemoryChunks(user.id, conversation.id, assistantMessage.id, assistantReply);
+
+  await db
+    .update(healthConversations)
+    .set({ mode: parsed.data.mode, updatedAt: new Date() })
+    .where(eq(healthConversations.id, conversation.id));
+
+  const messages = await db
+    .select()
+    .from(healthMessages)
+    .where(eq(healthMessages.conversationId, conversation.id))
+    .orderBy(healthMessages.createdAt)
+    .limit(100);
+
+  const response = healthChatResponseSchema.parse({
+    ...state,
+    conversationId: conversation.id,
+    reply: assistantReply,
+    messages: messages.map(serializeChatMessage),
+    execution,
+  });
+
+  await writeAuditLog(db, request, 'health.chat_message', user.id, {
+    conversationId: conversation.id,
+    intent: execution.intent,
+  });
+
+  return sendData(reply, request.id, response);
 });
 
 app.get('/api/v1/finance/categories', async (request, reply) => {
@@ -1126,3 +1725,17 @@ try {
   app.log.error(error);
   process.exit(1);
 }
+
+async function shutdown(signal: string) {
+  app.log.info({ signal }, 'Shutting down API');
+  try {
+    await app.close();
+    process.exit(0);
+  } catch (error) {
+    app.log.error(error);
+    process.exit(1);
+  }
+}
+
+process.once('SIGTERM', () => void shutdown('SIGTERM'));
+process.once('SIGINT', () => void shutdown('SIGINT'));
