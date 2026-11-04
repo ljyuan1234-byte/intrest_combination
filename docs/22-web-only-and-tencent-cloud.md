@@ -23,12 +23,14 @@
 
 ## 2. 腾讯云数据库选型
 
-当前代码使用 Drizzle + `pg`，**必须购买腾讯云 PostgreSQL**，不能直接换成 MySQL。
+当前代码使用 Drizzle + `pg`，**必须使用 PostgreSQL**，不能直接换成 MySQL。
+
+生产推荐腾讯云 PostgreSQL；如果只有 CVM，也可以使用 [`deploy/docker-compose.db.yml`](../deploy/docker-compose.db.yml) 启动 PostgreSQL 16 容器，步骤见 [`deploy/README.md`](../deploy/README.md) 5.1 节。容器数据库需要自己备份 volume，适合个人测试或低成本单机。
 
 如果买的是 MySQL/TDSQL-C MySQL，需要重写：
 
 - 全部 Drizzle schema；
-- 9 个 SQL 迁移；
+- 10 个 SQL 迁移；
 - 所有查询与 `bigint`、`jsonb`、`timestamp with time zone` 的写法；
 - 迁移执行器。
 
@@ -107,7 +109,15 @@ SESSION_SECRET=至少32字符随机值
 
 ## 6. 执行数据库迁移
 
-在能访问腾讯云数据库的机器上执行（推荐在 CVM 上，或临时开放公网并限制来源 IP）：
+推荐用 API 镜像自带的迁移器，在 CVM 上执行，不要求服务器安装 Node：
+
+```bash
+cd /opt/life-assistant/deploy
+docker compose --env-file .env.production run --rm api \
+  pnpm --filter @life/database migrate
+```
+
+如果镜像里找不到 `tsx`，再在能访问腾讯云数据库的机器上执行：
 
 ```bash
 cd /path/to/project
@@ -123,11 +133,13 @@ corepack pnpm --filter @life/database migrate
 
 - 创建 `__life_migrations`；
 - 使用 `pg_advisory_xact_lock` 防止并发执行；
-- 按 `0000` 到 `0008` 顺序执行，已执行的会跳过。
+- 按 `0000` 到 `0009` 顺序执行，已执行的会跳过。
 
 从本地迁移数据到腾讯云时，优先在空库上跑迁移，再用 `pg_dump` / `pg_restore` 导入业务数据；不要直接复制本地 `postgresql.conf`。
 
 ## 7. 部署到 CVM / Lighthouse
+
+完整步骤见 [`deploy/README.md`](../deploy/README.md)。
 
 ### 7.1 安装 Docker
 
@@ -143,19 +155,24 @@ docker compose version
 ```bash
 git clone <your-repo> /opt/life-assistant
 cd /opt/life-assistant
-cp deploy/env.production.example deploy/.env.production
-# 编辑 deploy/.env.production
+# 生产环境变量在 7.3 中创建
 ```
 
-### 7.3 启动
+### 7.3 构建、迁移和启动
 
 ```bash
-cd deploy
+cd /opt/life-assistant/deploy
 cp env.production.example .env.production
 # 编辑 .env.production
-docker compose --env-file .env.production up -d --build
+
+docker compose --env-file .env.production build
+docker compose --env-file .env.production run --rm api \
+  pnpm --filter @life/database migrate
+docker compose --env-file .env.production up -d
 docker compose --env-file .env.production logs -f api
 ```
+
+不要先 `up -d` 再迁移：新 API 可能在表结构未更新时启动并报错。
 
 Caddy 会自动为 `DOMAIN` 申请 HTTPS 证书。前提：
 

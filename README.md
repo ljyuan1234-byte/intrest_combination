@@ -7,7 +7,7 @@
 - `apps/web`：Next.js 15 Web 客户端，包含登录、仪表盘、待办、日程提醒、健康、财务和数据治理页面。
 - `apps/api`：Fastify 5 API，提供 Cookie 会话认证、业务接口、审计和健康检查。
 - `packages/contracts`：Zod API 契约，Web 与 API 共用。
-- `packages/database`：Drizzle Schema、PostgreSQL 连接池和 9 个版本化迁移。
+- `packages/database`：Drizzle Schema、PostgreSQL 连接池和 10 个版本化迁移。
 - `deploy/`：腾讯云 CVM/Lighthouse 的 Docker Compose、Caddy、API/Web 镜像和生产环境模板。
 - `docs/22-web-only-and-tencent-cloud.md`：纯 Web 架构与腾讯云 PostgreSQL 部署说明。
 - Web 端已加入 PWA manifest、手机底部导航和移动浏览器适配。

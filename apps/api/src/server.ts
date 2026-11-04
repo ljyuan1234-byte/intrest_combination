@@ -48,6 +48,7 @@ import {
   healthProfiles,
   healthRecords,
   idempotencyKeys,
+  llmUsageLogs,
   reminders,
   sessions,
   tasks,
@@ -1244,6 +1245,48 @@ app.post('/api/v1/health/agent/intake', async (request, reply) => {
   return sendData(reply, request.id, response);
 });
 
+app.get('/api/v1/health/llm-usage', async (request, reply) => {
+  const user = await getCurrentUser(db, request);
+  if (!user) return sendError(reply, request.id, 401, 'UNAUTHENTICATED', '需要登录。');
+
+  const parsed = z.object({ date: z.string().date().optional() }).safeParse(request.query);
+  if (!parsed.success) return sendError(reply, request.id, 400, 'VALIDATION_ERROR', '日期无效。');
+
+  const date = parsed.data.date ?? todayInShanghai();
+  const [row] = await db
+    .select({
+      requests: sql<number>`count(*)::int`,
+      inputTokens: sql<number>`coalesce(sum(${llmUsageLogs.inputTokens}), 0)::int`,
+      outputTokens: sql<number>`coalesce(sum(${llmUsageLogs.outputTokens}), 0)::int`,
+      totalTokens: sql<number>`coalesce(sum(${llmUsageLogs.totalTokens}), 0)::int`,
+    })
+    .from(llmUsageLogs)
+    .where(and(eq(llmUsageLogs.userId, user.id), eq(llmUsageLogs.localDate, date)));
+
+  const requests = Number(row?.requests ?? 0);
+  const totalTokens = Number(row?.totalTokens ?? 0);
+
+  return sendData(reply, request.id, {
+    date,
+    model: config.LLM_MODEL ?? null,
+    mode: config.LLM_MODE,
+    requests,
+    inputTokens: Number(row?.inputTokens ?? 0),
+    outputTokens: Number(row?.outputTokens ?? 0),
+    totalTokens,
+    limits: {
+      dailyRequests: config.LLM_DAILY_REQUEST_LIMIT,
+      dailyTokens: config.LLM_DAILY_TOKEN_BUDGET,
+      maxOutputTokens: config.LLM_MAX_OUTPUT_TOKENS,
+      maxInputChars: config.LLM_MAX_INPUT_CHARS,
+    },
+    remaining: {
+      requests: Math.max(0, config.LLM_DAILY_REQUEST_LIMIT - requests),
+      tokens: Math.max(0, config.LLM_DAILY_TOKEN_BUDGET - totalTokens),
+    },
+  });
+});
+
 app.get('/api/v1/health/chat', async (request, reply) => {
   const user = await getCurrentUser(db, request);
   if (!user) return sendError(reply, request.id, 401, 'UNAUTHENTICATED', '需要登录。');
@@ -1390,7 +1433,20 @@ app.post('/api/v1/health/chat', async (request, reply) => {
 
   const memory = retrieveMemoryHybrid(parsed.data.message, memoryRows, 5, queryEmbedding);
 
-  const { reply: assistantReply, execution } = await composeChatReply({
+  const [llmToday] = await db
+    .select({
+      requests: sql<number>`count(*)::int`,
+      tokens: sql<number>`coalesce(sum(${llmUsageLogs.totalTokens}), 0)::int`,
+    })
+    .from(llmUsageLogs)
+    .where(and(eq(llmUsageLogs.userId, user.id), eq(llmUsageLogs.localDate, date)));
+
+  const llmTokensToday = Number(llmToday?.tokens ?? 0);
+  const llmRequestsToday = Number(llmToday?.requests ?? 0);
+  const allowLlm =
+    llmTokensToday < config.LLM_DAILY_TOKEN_BUDGET && llmRequestsToday < config.LLM_DAILY_REQUEST_LIMIT;
+
+  const { reply: assistantReply, execution, usage: llmUsage } = await composeChatReply({
     config,
     message: parsed.data.message,
     mode: state.analysis.mode,
@@ -1399,7 +1455,19 @@ app.post('/api/v1/health/chat', async (request, reply) => {
     memory,
     loggedItems: matchedItems.map((item) => ({ name: item.name, calories: item.calories })),
     unknownCount: food.unknownCount,
+    allowLlm,
   });
+
+  if (llmUsage) {
+    await db.insert(llmUsageLogs).values({
+      userId: user.id,
+      localDate: date,
+      model: config.LLM_MODEL ?? 'unknown',
+      inputTokens: llmUsage.inputTokens,
+      outputTokens: llmUsage.outputTokens,
+      totalTokens: llmUsage.totalTokens,
+    });
+  }
 
   const [assistantMessage] = await db
     .insert(healthMessages)

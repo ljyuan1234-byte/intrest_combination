@@ -25,6 +25,13 @@ const environmentSchema = z.object({
   LLM_API_KEY: z.string().min(1).optional(),
   LLM_MODEL: z.string().min(1).optional(),
   LLM_TIMEOUT_MS: z.coerce.number().int().positive().max(120_000).default(30_000),
+  /** smart：简单饮食记录走确定性回复；always：每次都调用；off：完全关闭模型解释。 */
+  LLM_MODE: z.enum(['smart', 'always', 'off']).default('smart'),
+  LLM_MAX_OUTPUT_TOKENS: z.coerce.number().int().min(64).max(4096).default(400),
+  /** 单次请求的输入字符数上限，超过后退回确定性回复。 */
+  LLM_MAX_INPUT_CHARS: z.coerce.number().int().min(1000).max(50_000).default(8000),
+  LLM_DAILY_REQUEST_LIMIT: z.coerce.number().int().positive().max(10_000).default(30),
+  LLM_DAILY_TOKEN_BUDGET: z.coerce.number().int().positive().max(10_000_000).default(20_000),
 
   /**
    * 可选：OpenAI 兼容的 embedding 服务。

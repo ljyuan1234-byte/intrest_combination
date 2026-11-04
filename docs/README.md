@@ -17,6 +17,7 @@
 | [14-security-and-data-governance.md](./14-security-and-data-governance.md) | 数据分级、导出、删除与审计 |
 | [19-phase-1-implementation.md](./19-phase-1-implementation.md) | Phase 1 实施基线 |
 | [22-web-only-and-tencent-cloud.md](./22-web-only-and-tencent-cloud.md) | Web-only 架构、腾讯云 PostgreSQL、Docker/Caddy 部署 |
+| [deploy/README.md](../deploy/README.md) | 腾讯云 Docker 部署、迁移、更新与回滚步骤 |
 | [23-health-agent.md](./23-health-agent.md) | 健康规划 Agent、双模式、食物解析与安全边界 |
 | [24-health-agent-rag-and-prompting.md](./24-health-agent-rag-and-prompting.md) | 对话、RAG 切片记忆、Plan-and-Execute 与 Prompt 工程 |
 | [agent-and-permissions.md](./agent-and-permissions.md) | Agent 工具目录与风险等级 |

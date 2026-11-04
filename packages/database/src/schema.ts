@@ -258,6 +258,26 @@ export const healthMemoryChunks = pgTable(
   (table) => [index('health_memory_chunks_user_created_at_idx').on(table.userId, table.createdAt)],
 );
 
+export const llmUsageLogs = pgTable(
+  'llm_usage_logs',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    localDate: varchar('local_date', { length: 10 }).notNull(),
+    model: varchar('model', { length: 120 }).notNull(),
+    inputTokens: integer('input_tokens').notNull().default(0),
+    outputTokens: integer('output_tokens').notNull().default(0),
+    totalTokens: integer('total_tokens').notNull().default(0),
+    createdAt,
+  },
+  (table) => [
+    index('llm_usage_logs_user_date_idx').on(table.userId, table.localDate),
+    index('llm_usage_logs_created_at_idx').on(table.createdAt),
+  ],
+);
+
 export const expenseCategories = pgTable(
   'expense_categories',
   {

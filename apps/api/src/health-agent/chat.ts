@@ -5,7 +5,7 @@ import type {
   HealthPlan,
 } from '@life/contracts';
 import type { AppConfig } from '../config.js';
-import { chatCompletion, isLlmConfigured } from './llm.js';
+import { chatCompletion, isLlmConfigured, type LlmUsage } from './llm.js';
 import { buildComposePrompt, buildFallbackReply, HEALTH_AGENT_SYSTEM_PROMPT } from './prompts.js';
 
 type ComposeInput = {
@@ -17,6 +17,14 @@ type ComposeInput = {
   memory: Array<{ content: string }>;
   loggedItems: Array<{ name: string; calories: number }>;
   unknownCount: number;
+  /** 当天的 token/请求预算是否还允许调用模型。 */
+  allowLlm?: boolean;
+};
+
+export type ComposeChatResult = {
+  reply: string;
+  execution: HealthExecutionPlan;
+  usage: LlmUsage | null;
 };
 
 export function classifyIntent(message: string, matchedFoodCount: number): HealthExecutionPlan['intent'] {
@@ -50,7 +58,21 @@ export function buildExecutionPlan(input: ComposeInput): HealthExecutionPlan {
   return { intent, steps, followUp };
 }
 
-export async function composeChatReply(input: ComposeInput): Promise<{ reply: string; execution: HealthExecutionPlan }> {
+function shouldCallLlm(input: ComposeInput, execution: HealthExecutionPlan): boolean {
+  if (input.allowLlm === false) return false;
+  if (input.config.LLM_MODE === 'off') return false;
+
+  if (input.config.LLM_MODE === 'smart') {
+    // 单纯的“午餐吃了米饭”不需要模型；只有解释、追问、计划类请求才调用。
+    if (execution.intent === 'log_food') {
+      return /[?？]|为什么|怎么|解释|建议|计划|调整|太高|太低|热量|蛋白|营养|睡眠|运动/.test(input.message);
+    }
+  }
+
+  return true;
+}
+
+export async function composeChatReply(input: ComposeInput): Promise<ComposeChatResult> {
   const execution = buildExecutionPlan(input);
 
   const promptInput = {
@@ -63,14 +85,16 @@ export async function composeChatReply(input: ComposeInput): Promise<{ reply: st
     followUp: execution.followUp,
   };
 
-  if (isLlmConfigured(input.config)) {
-    const reply = await chatCompletion(input.config, [
+  if (isLlmConfigured(input.config) && shouldCallLlm(input, execution)) {
+    const result = await chatCompletion(input.config, [
       { role: 'system', content: HEALTH_AGENT_SYSTEM_PROMPT },
       { role: 'user', content: buildComposePrompt(promptInput) },
     ]);
 
-    if (reply) return { reply, execution };
+    if (result) {
+      return { reply: result.content, execution, usage: result.usage };
+    }
   }
 
-  return { reply: buildFallbackReply(promptInput), execution };
+  return { reply: buildFallbackReply(promptInput), execution, usage: null };
 }

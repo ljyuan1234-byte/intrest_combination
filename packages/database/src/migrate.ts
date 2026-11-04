@@ -48,6 +48,10 @@ const migrations = [
     id: '0008_phase_4_health_conversations',
     sqlUrl: new URL('../drizzle/0008_phase_4_health_conversations.sql', import.meta.url),
   },
+  {
+    id: '0009_phase_4_llm_usage',
+    sqlUrl: new URL('../drizzle/0009_phase_4_llm_usage.sql', import.meta.url),
+  },
 ] as const;
 
 const pool = new Pool({

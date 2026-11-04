@@ -37,7 +37,7 @@ Plan-and-Execute：意图分类 + 工具步骤
 | `health_messages` | 用户/助手消息，`metadata` 记录执行计划 |
 | `health_memory_chunks` | 对话切片，供 RAG 检索；预留 `embedding` |
 
-迁移：`0008_phase_4_health_conversations`。
+迁移：`0008_phase_4_health_conversations`、`0009_phase_4_llm_usage`。
 
 ## 3. RAG：词法 + 可选向量混合
 
@@ -145,6 +145,29 @@ DeepSeek 当前模型名为 `deepseek-flash` 或 `deepseek-v4-pro`。代码在�
 未配置时自动使用确定性回复，不影响记录和计划。
 
 > 模型不参与热量计算，也不直接写数据库。所有写入由 API 按工具结果执行。
+
+### 6.1 Token 与费用限制
+
+默认配置：
+
+```dotenv
+LLM_MODE=smart
+LLM_MAX_OUTPUT_TOKENS=400
+LLM_MAX_INPUT_CHARS=8000
+LLM_DAILY_REQUEST_LIMIT=30
+LLM_DAILY_TOKEN_BUDGET=20000
+```
+
+- `LLM_MODE=smart`：单纯记录饮食不调用模型，只返回确定性模板；解释、计划、调整类问题才调用；
+- `LLM_MAX_OUTPUT_TOKENS`：单次回答最多 400 token，不是 800；
+- `LLM_MAX_INPUT_CHARS`：Prompt 超过 8000 字符直接退回模板，避免超长上下文；
+- `LLM_DAILY_REQUEST_LIMIT` / `LLM_DAILY_TOKEN_BUDGET`：按用户、按天统计，超限后只用确定性回复；
+- 每次模型调用的输入/输出 token 写入 `llm_usage_logs`；
+- `GET /api/v1/health/llm-usage?date=YYYY-MM-DD` 可查看当天用量和剩余额度。
+
+`LLM_MODE=off` 可以完全关闭模型解释，`always` 仅建议在明确监控成本时使用。
+
+> 密钥只放 `.env` 或服务器 `deploy/.env.production`，不要写进 `.env.example`、代码或 Git。若曾提交过真实 Key，应立即在供应商控制台吊销并重新生成，因为 Git 历史仍可能保留旧值。
 
 ## 7. 指标提取
 
